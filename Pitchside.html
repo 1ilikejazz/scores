@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pitchside</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#14171c;--mute:#6b7280;--line:#e5e7eb;--accent:#16a34a;--live:#ef4444}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--text:#f1f3f5;--mute:#8b93a1;--line:#272b33}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px -apple-system,system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{position:sticky;top:0;background:var(--bg);padding:12px 12px 6px;z-index:5}
+h1{font-size:20px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center}
+button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:7px 12px}
+.row{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px}
+.row::-webkit-scrollbar{display:none}
+.chip{white-space:nowrap}
+.on{background:var(--accent);border-color:var(--accent);color:#fff}
+input{width:100%;font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin:4px 0 8px}
+main{padding:0 12px 24px}
+.lg{background:var(--card);border-radius:14px;margin-bottom:10px;overflow:hidden}
+.lh{display:flex;align-items:center;gap:8px;padding:10px 12px;font-weight:600;cursor:pointer}
+.lh img{width:20px;height:20px;object-fit:contain}
+.lh small{color:var(--mute);font-weight:400;margin-left:auto}
+.m{display:grid;grid-template-columns:48px 1fr 28px;gap:8px;padding:9px 12px;border-top:1px solid var(--line);align-items:center}
+.t{font-size:12px;color:var(--mute);text-align:center}
+.t.live{color:var(--live);font-weight:700}
+.tm{display:flex;align-items:center;gap:8px;line-height:1.7}
+.tm img{width:18px;height:18px;object-fit:contain}
+.sc{text-align:right;font-weight:600;line-height:1.7}
+.msg{text-align:center;color:var(--mute);padding:40px 16px}
+.setup{max-width:420px;margin:60px auto;padding:0 16px}
+.setup p{color:var(--mute);line-height:1.5}
+.setup button{width:100%;background:var(--accent);color:#fff;border-color:var(--accent);padding:11px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const EU = ["Albania","Andorra","Armenia","Austria","Azerbaijan","Belarus","Belgium","Bosnia-and-Herzegovina","Bulgaria","Croatia","Cyprus","Czech-Republic","Denmark","England","Estonia","Faroe-Islands","Finland","France","Georgia","Germany","Gibraltar","Greece","Hungary","Iceland","Ireland","Israel","Italy","Kazakhstan","Kosovo","Latvia","Liechtenstein","Lithuania","Luxembourg","Malta","Moldova","Montenegro","Netherlands","North-Macedonia","Northern-Ireland","Norway","Poland","Portugal","Romania","Russia","San-Marino","Scotland","Serbia","Slovakia","Slovenia","Spain","Sweden","Switzerland","Turkey","Ukraine","Wales"];
+const UEFA = /uefa|europa|champions league|conference league|euro champ/i;
+const BASE = "https://v3.football.api-sports.io/fixtures?date=";
+const LIVE = ["1H","HT","2H","ET","BT","P","LIVE","INT"];
+const FIN = ["FT","AET","PEN"];
+let state = {day:0, tab:"all", q:"", data:[], loading:false, err:"", closed:{}};
+
+const $ = s => document.querySelector(s);
+const store = {
+  get(k){try{return localStorage.getItem(k)}catch(e){return null}},
+  set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+};
+const key = () => store.get("pk_key");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function dateFor(off){
+  const d = new Date(); d.setDate(d.getDate()+off);
+  return d.toLocaleDateString("en-CA");
+}
+function label(off){
+  if(off===0) return "Today"; if(off===-1) return "Yesterday"; if(off===1) return "Tomorrow";
+  return new Date(dateFor(off)+"T12:00").toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short"});
+}
+
+async function load(force){
+  const date = dateFor(state.day), ck = "pk_cache_"+date;
+  const cached = JSON.parse(store.get(ck)||"null");
+  const ttl = state.day===0 ? 120000 : 3600000;
+  if(!force && cached && Date.now()-cached.t < ttl){ state.data=cached.d; state.err=""; return render(); }
+  state.loading=true; state.err=""; render();
+  try{
+    const ac = new AbortController(); const to = setTimeout(()=>ac.abort(), 8000);
+    const r = await fetch(BASE+date,{headers:{"x-apisports-key":key()},signal:ac.signal}); clearTimeout(to);
+    const j = await r.json();
+    const errs = j.errors && (Array.isArray(j.errors)?j.errors[0]:Object.values(j.errors)[0]);
+    if(errs) throw new Error(errs);
+    const eu = j.response.filter(f => EU.includes(f.league.country.replace(/ /g,"-")) || (f.league.country==="World" && UEFA.test(f.league.name)));
+    state.data = eu;
+    store.set(ck, JSON.stringify({t:Date.now(), d:eu}));
+  }catch(e){
+    state.err = (e.name==="AbortError"||e.name==="TypeError") ? "Can't reach the football API from this page. Host the file on Netlify or GitHub Pages to get live data." : (e.message || "Could not load matches");
+    if(cached) state.data = cached.d;
+  }
+  state.loading=false; render();
+}
+
+function statusOf(f){
+  const s=f.fixture.status.short;
+  if(LIVE.includes(s)) return {k:"live", t: s==="HT"?"HT":(f.fixture.status.elapsed||"")+"'"};
+  if(FIN.includes(s)) return {k:"fin", t:"FT"};
+  if(s==="NS"||s==="TBD") return {k:"up", t:new Date(f.fixture.date).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})};
+  return {k:"other", t:s};
+}
+
+function render(){
+  const app = $("#app");
+  if(!key()){
+    app.innerHTML = `<div class="setup"><h1>Pitchside</h1>
+    <p>Live scores for every European league. Get a free key at <b>dashboard.api-football.com</b> (100 requests/day), then paste it here. It stays on this device.</p>
+    <input id="k" placeholder="API key" autocapitalize="off" autocorrect="off"><button id="sv">Start</button></div>`;
+    $("#sv").onclick = () => { const v=$("#k").value.trim(); if(v){store.set("pk_key",v); load();} };
+    return;
+  }
+  const q = state.q.toLowerCase();
+  let list = state.data.filter(f => {
+    const s = statusOf(f).k;
+    if(state.tab==="live" && s!=="live") return false;
+    if(state.tab==="fin" && s!=="fin") return false;
+    if(state.tab==="up" && s!=="up") return false;
+    if(q && !(f.teams.home.name+f.teams.away.name+f.league.name+f.league.country).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const groups = {};
+  list.forEach(f => (groups[f.league.id] = groups[f.league.id] || {l:f.league, m:[]}).m.push(f));
+  const gs = Object.values(groups).sort((a,b)=> (UEFA.test(b.l.name)-UEFA.test(a.l.name)) || a.l.country.localeCompare(b.l.country) || a.l.name.localeCompare(b.l.name));
+  const days = [-3,-2,-1,0,1,2,3].map(o=>`<button class="chip ${o===state.day?"on":""}" data-d="${o}">${label(o)}</button>`).join("");
+  const tabs = [["all","All"],["live","Live"],["up","Upcoming"],["fin","Finished"]].map(([k,n])=>`<button class="chip ${k===state.tab?"on":""}" data-t="${k}">${n}</button>`).join("");
+  let body = "";
+  if(state.loading) body = `<div class="msg">Loading…</div>`;
+  else if(state.err && !gs.length) body = `<div class="msg">${esc(state.err)}</div>`;
+  else if(!gs.length) body = `<div class="msg">No matches found</div>`;
+  else body = (state.err?`<div class="msg" style="padding:6px">${esc(state.err)} (showing saved data)</div>`:"") + gs.map(g=>{
+    const c = state.closed[g.l.id];
+    return `<div class="lg"><div class="lh" data-l="${g.l.id}"><img src="${esc(g.l.logo||"")}" alt=""><span>${esc(g.l.country==="World"?"Europe":g.l.country)} · ${esc(g.l.name)}</span><small>${c?"▸":"▾"} ${g.m.length}</small></div>` +
+    (c?"":g.m.sort((a,b)=>a.fixture.timestamp-b.fixture.timestamp).map(f=>{
+      const s=statusOf(f), sc=f.goals.home!=null;
+      return `<div class="m"><div class="t ${s.k==="live"?"live":""}">${esc(s.t)}</div>
+      <div><div class="tm"><img src="${esc(f.teams.home.logo)}" alt="">${esc(f.teams.home.name)}</div><div class="tm"><img src="${esc(f.teams.away.logo)}" alt="">${esc(f.teams.away.name)}</div></div>
+      <div class="sc">${sc?`<div>${f.goals.home}</div><div>${f.goals.away}</div>`:""}</div></div>`;
+    }).join("")) + `</div>`;
+  }).join("");
+  const keep = document.activeElement && document.activeElement.id==="q";
+  app.innerHTML = `<header><h1>Pitchside <span><button id="rf">↻</button> <button id="lo">Key</button></span></h1>
+  <div class="row">${days}</div><input id="q" placeholder="Search team, league or country" value="${esc(state.q)}"><div class="row">${tabs}</div></header><main>${body}</main>`;
+  if(keep){const i=$("#q"); i.focus(); i.setSelectionRange(i.value.length,i.value.length);}
+  $("#q").oninput = e => { state.q=e.target.value; render(); };
+  $("#rf").onclick = () => load(true);
+  $("#lo").onclick = () => { if(confirm("Remove saved API key?")){store.set("pk_key",""); render();} };
+  document.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>{state.day=+b.dataset.d; load();});
+  document.querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{state.tab=b.dataset.t; render();});
+  document.querySelectorAll("[data-l]").forEach(b=>b.onclick=()=>{state.closed[b.dataset.l]=!state.closed[b.dataset.l]; render();});
+}
+
+setInterval(()=>{ if(key() && state.day===0 && !document.hidden && state.data.some(f=>statusOf(f).k==="live")) load(true); }, 180000);
+render(); if(key()) load();
+</script>
+</body>
+</html>
